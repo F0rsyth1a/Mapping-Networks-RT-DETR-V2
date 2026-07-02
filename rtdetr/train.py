@@ -1,6 +1,8 @@
 import argparse
 import os
 import sys
+# Allow running from any directory
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from config_rtdetr import RTDETRConfig
 from rtdetr.spec import get_total_target_params

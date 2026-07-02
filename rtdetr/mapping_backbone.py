@@ -117,10 +117,6 @@ class MappingBackbone(nn.Module):
                         "bn_var": state[v_key].detach().clone().float(),
                         "bn_eps": 1e-5,
                     }
-                        "bn_mean": state[m_key].detach().clone().float(),
-                        "bn_var": state[v_key].detach().clone().float(),
-                        "bn_eps": 1e-5,
-                    }
 
     def count_trainable_params(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

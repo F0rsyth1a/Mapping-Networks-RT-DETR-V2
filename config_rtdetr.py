@@ -17,7 +17,7 @@ class RTDETRConfig:
     alpha: float = 0.001
     layerwise: bool = True
     block_size: int = 8192
-    cache_projections: bool = True
+    cache_projections: bool = False
     use_tanh: bool = True
     output_gain: float = 1.0
 

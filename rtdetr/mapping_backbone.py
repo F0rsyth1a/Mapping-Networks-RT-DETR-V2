@@ -189,6 +189,7 @@ def _find_ckpt_keys(
     parts = name.split(".")
     block_nums = [2, 2, 2, 2] if depth == 18 else [3, 4, 6, 3]
     stage_names = ["res2", "res3", "res4", "res5"]
+    sub = None
 
     if parts[0] == "conv1":
         # conv1.conv1_1 → conv1.conv1_1.conv
@@ -200,6 +201,9 @@ def _find_ckpt_keys(
                 sub = parts[2]
                 if sub == "shortcut":
                     tail = f"res_layers.{si}.blocks.{block_idx}.short.conv"
+                    # variant='d' with stride=2 wraps shortcut in Sequential:
+                    # conv → pool+conv, so ckpt key has extra ".conv"
+                    tail_alt = f"res_layers.{si}.blocks.{block_idx}.short.conv.conv"
                 else:
                     tail = f"res_layers.{si}.blocks.{block_idx}.{sub}.conv"
                 break
@@ -207,6 +211,8 @@ def _find_ckpt_keys(
             return None, None
 
     candidates_conv = [tail, f"backbone.{tail}"]
+    if sub == "shortcut":
+        candidates_conv += [tail_alt, f"backbone.{tail_alt}"]
     conv_key = None
     for c in candidates_conv:
         if f"{c}.weight" in state:
@@ -220,6 +226,9 @@ def _find_ckpt_keys(
 
     bn_prefix = tail.replace(".conv", ".norm")
     bn_candidates = [bn_prefix, f"backbone.{bn_prefix}"]
+    if sub == "shortcut":
+        bn_alt = tail_alt.replace(".conv", ".norm")
+        bn_candidates += [bn_alt, f"backbone.{bn_alt}"]
     bn_key = None
     for c in bn_candidates:
         if f"{c}.weight" in state:

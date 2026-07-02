@@ -94,6 +94,8 @@ def train(cfg: Config):
         block_size=cfg.block_size,
         use_tanh=cfg.use_tanh,
         cache_projections=cfg.cache_projections,
+        latent_init_std=cfg.latent_init_std,
+        output_gain=cfg.output_gain,
     ).to(device)
 
     trainable = mapping.count_trainable_params()

@@ -14,6 +14,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--alpha", type=float, default=0.001)
+    parser.add_argument("--latent_init_std", type=float, default=1.0)
+    parser.add_argument("--output_gain", type=float, default=3.0)
     parser.add_argument("--lambda_stability", type=float, default=0.01)
     parser.add_argument("--lambda_smoothness", type=float, default=0.1)
     parser.add_argument("--lambda_alignment", type=float, default=0.001)
@@ -30,6 +32,8 @@ def main():
         epochs=args.epochs,
         lr=args.lr,
         alpha=args.alpha,
+        latent_init_std=args.latent_init_std,
+        output_gain=args.output_gain,
         lambda_stability=args.lambda_stability,
         lambda_smoothness=args.lambda_smoothness,
         lambda_alignment=args.lambda_alignment,

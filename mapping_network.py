@@ -106,12 +106,15 @@ class MappingNetwork(nn.Module):
         block_size: int = 8192,
         use_tanh: bool = True,
         cache_projections: bool = False,
+        latent_init_std: float = 1.0,
+        output_gain: float = 1.0,
     ):
         super().__init__()
         self.latent_dim = latent_dim
         self.alpha = alpha
+        self.output_gain = output_gain
 
-        self.z = nn.Parameter(torch.randn(1, latent_dim) * 0.01)
+        self.z = nn.Parameter(torch.randn(1, latent_dim) * latent_init_std)
         self.layer_specs = get_layer_specs(cnn_spec_name)
         self.layer_param_counts = get_layer_param_counts(cnn_spec_name)
 
@@ -155,7 +158,7 @@ class MappingNetwork(nn.Module):
             b_shape = spec["bias"]
             n_w = int(np.prod(w_shape))
             fan_in = int(np.prod(w_shape[1:])) if len(w_shape) > 1 else w_shape[1]
-            weight_scale = 1.0 / (fan_in ** 0.5)
+            weight_scale = self.output_gain / (fan_in ** 0.5)
             bias_scale = weight_scale * 0.01
             w_flat = theta[:, :n_w] * weight_scale
             b_flat = theta[:, n_w:] * bias_scale

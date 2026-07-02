@@ -19,6 +19,8 @@ class Config:
     use_tanh: bool = True
     block_size: int = 8192
     cache_projections: bool = True
+    latent_init_std: float = 1.0
+    output_gain: float = 3.0
 
     lambda_stability: float = 0.01
     stability_sigma: float = 0.01

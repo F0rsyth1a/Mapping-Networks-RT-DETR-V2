@@ -10,17 +10,18 @@ from rtdetr.spec import get_stage_groups
 
 
 def _backbone_stability_loss(mapping: MappingBackbone, x: torch.Tensor, sigma: float = 0.01):
-    original_latents = [l.clone() for l in mapping.latents]
+    """Stability: compare feature maps with z + noise."""
+    original_data = [l.data.clone() for l in mapping.latents]
 
-    noisy_latents = nn.ParameterList(
-        [nn.Parameter(l.data + torch.randn_like(l.data) * sigma) for l in mapping.latents]
-    )
-    mapping.latents = noisy_latents
+    for l in mapping.latents:
+        l.data.add_(torch.randn_like(l.data) * sigma)
 
     with torch.no_grad():
         feats_noisy = mapping(x, return_smoothness=False)
 
-    mapping.latents = original_latents
+    for i, l in enumerate(mapping.latents):
+        l.data.copy_(original_data[i])
+
     feats_clean = mapping(x, return_smoothness=False)
 
     loss = 0.0

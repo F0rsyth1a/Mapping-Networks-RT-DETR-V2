@@ -29,10 +29,13 @@ def _conv_bn_relu(
     bn_var: torch.Tensor,
     bn_eps: float,
     stride: int = 1,
-    padding: int = 1,
+    padding: int = None,
     groups: int = 1,
     act: bool = True,
 ) -> torch.Tensor:
+    if padding is None:
+        k = conv_w.shape[-1]
+        padding = (k - 1) // 2
     x = F.conv2d(x, conv_w, None, stride=stride, padding=padding, groups=groups)
     x = _frozen_bn(x, bn_w, bn_b, bn_mean, bn_var, bn_eps)
     if act:

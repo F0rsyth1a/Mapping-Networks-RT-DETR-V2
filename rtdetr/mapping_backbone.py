@@ -8,7 +8,8 @@ from rtdetr.spec import build_backbone_specs, get_stage_groups
 from rtdetr.functional_presnet import presnet_forward
 
 
-BN_KEYS = ["bn_w", "bn_b", "bn_mean", "bn_var", "bn_eps"]
+def _sanitize(name: str) -> str:
+    return name.replace(".", "_")
 
 
 class MappingBackbone(nn.Module):
@@ -39,11 +40,13 @@ class MappingBackbone(nn.Module):
         self.conv_shapes: Dict[str, Tuple[int, ...]] = {}
         self.conv_stage: Dict[str, str] = {}
         self.conv_fan_in: Dict[str, int] = {}
+        self._name_list: List[str] = []
 
         for name, (w_shape, _) in self.conv_specs.items():
             self.conv_shapes[name] = w_shape
             fan_in = int(np.prod(w_shape[1:])) if len(w_shape) > 1 else w_shape[1]
             self.conv_fan_in[name] = fan_in
+            self._name_list.append(name)
 
             for group in stage_groups:
                 if name.startswith(group) or (group == "conv1" and name.startswith("conv1")):
@@ -52,16 +55,17 @@ class MappingBackbone(nn.Module):
 
         self._extract_pretrained(pretrained_state, depth)
 
+        self.projections = nn.ModuleDict()
+        seed_counter = 0
+
         if layerwise:
             self.latents = nn.ParameterList(
                 [nn.Parameter(torch.randn(1, latent_dim) * 1.0) for _ in stage_groups]
             )
-            self.projections = nn.ModuleDict()
-            seed_counter = 0
             for group_idx, group in enumerate(stage_groups):
                 group_layers = [n for n in self.conv_specs if self.conv_stage.get(n) == group]
                 for name in group_layers:
-                    self.projections[name] = OnTheFlyProjection(
+                    self.projections[_sanitize(name)] = OnTheFlyProjection(
                         in_dim=latent_dim,
                         out_dim=int(np.prod(self.conv_shapes[name])),
                         seed=seed_counter,
@@ -71,33 +75,36 @@ class MappingBackbone(nn.Module):
                     seed_counter += 1
         else:
             self.latent = nn.Parameter(torch.randn(1, latent_dim) * 1.0)
-            self.projections = nn.ModuleDict()
-            for i, name in enumerate(self.conv_specs):
-                self.projections[name] = OnTheFlyProjection(
+            for name in self._name_list:
+                self.projections[_sanitize(name)] = OnTheFlyProjection(
                     in_dim=latent_dim,
                     out_dim=int(np.prod(self.conv_shapes[name])),
-                    seed=i,
+                    seed=seed_counter,
                     block_size=block_size,
                     use_tanh=use_tanh,
                 )
+                seed_counter += 1
 
     def _extract_pretrained(self, state: Dict[str, torch.Tensor], depth: int):
-        # Map RT-DETR state dict keys to our naming
+        if not state:
+            return
         for name in self.conv_specs:
-            parts = name.split(".")
-            ckpt_name = _to_presnet_key(parts, depth)
-            conv_key = f"{ckpt_name}.weight"
-            if conv_key in state:
+            conv_key, bn_prefix = _find_ckpt_keys(name, depth, state)
+            if conv_key and conv_key in state:
                 self.pretrained_conv[name] = state[conv_key].detach().clone().float()
-            bn_name = ckpt_name.replace(".conv", ".norm")
-            if f"{bn_name}.weight" in state:
-                self.bn_buffers[name] = {
-                    "bn_w": state[f"{bn_name}.weight"].detach().clone().float(),
-                    "bn_b": state[f"{bn_name}.bias"].detach().clone().float(),
-                    "bn_mean": state[f"{bn_name}.running_mean"].detach().clone().float(),
-                    "bn_var": state[f"{bn_name}.running_var"].detach().clone().float(),
-                    "bn_eps": 1e-5,
-                }
+            if bn_prefix:
+                w_key = f"{bn_prefix}.weight"
+                b_key = f"{bn_prefix}.bias"
+                m_key = f"{bn_prefix}.running_mean"
+                v_key = f"{bn_prefix}.running_var"
+                if w_key in state:
+                    self.bn_buffers[name] = {
+                        "bn_w": state[w_key].detach().clone().float(),
+                        "bn_b": state[b_key].detach().clone().float(),
+                        "bn_mean": state[m_key].detach().clone().float(),
+                        "bn_var": state[v_key].detach().clone().float(),
+                        "bn_eps": 1e-5,
+                    }
 
     def count_trainable_params(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -118,7 +125,8 @@ class MappingBackbone(nn.Module):
         adapted = {}
         smooth_vals = []
 
-        for name, proj in self.projections.items():
+        for name in self._name_list:
+            proj = self.projections[_sanitize(name)]
             stage = self.conv_stage[name]
             z = self._get_latent(stage)
             out = proj(z, self.alpha, return_smoothness)
@@ -152,10 +160,9 @@ class MappingBackbone(nn.Module):
 
         device = x.device
         conv_w = {k: v.to(device) for k, v in adapted_weights.items()}
-        bn = {
-            k: {kk: vv.to(device) for kk, vv in v.items()}
-            for k, v in self.bn_buffers.items()
-        }
+        bn = {}
+        for k, v in self.bn_buffers.items():
+            bn[k] = {kk: vv.to(device) for kk, vv in v.items()}
 
         feats = presnet_forward(x, conv_w, bn, self.depth)
         if return_smoothness:
@@ -163,21 +170,48 @@ class MappingBackbone(nn.Module):
         return feats
 
 
-def _to_presnet_key(parts: List[str], depth: int) -> str:
-    """Convert our key format to PResNet state dict key format."""
+def _find_ckpt_keys(
+    name: str, depth: int, state: Dict[str, torch.Tensor]
+) -> Tuple[Optional[str], Optional[str]]:
+    """Find the checkpoint key for a conv layer, trying both with and without 'backbone.' prefix."""
+    parts = name.split(".")
     block_nums = [2, 2, 2, 2] if depth == 18 else [3, 4, 6, 3]
     stage_names = ["res2", "res3", "res4", "res5"]
 
     if parts[0] == "conv1":
-        return f"backbone.conv1.{parts[1]}.conv"
+        # conv1.conv1_1 → conv1.conv1_1.conv
+        tail = f"conv1.{parts[1]}.conv"
+    else:
+        for si, stage_name in enumerate(stage_names):
+            if parts[0] == stage_name:
+                block_idx = int(parts[1].replace("block", ""))
+                sub = parts[2]
+                if sub == "shortcut":
+                    tail = f"res_layers.{si}.blocks.{block_idx}.short.conv"
+                else:
+                    tail = f"res_layers.{si}.blocks.{block_idx}.{sub}.conv"
+                break
+        else:
+            return None, None
 
-    for si, stage_name in enumerate(stage_names):
-        if parts[0] == stage_name:
-            block_str = parts[1]
-            block_idx = int(block_str.replace("block", ""))
-            sub = parts[2] if len(parts) > 2 else ""
-            if sub == "shortcut":
-                return f"backbone.res_layers.{si}.blocks.{block_idx}.short.conv"
-            elif sub in ("branch2a", "branch2b", "branch2c"):
-                return f"backbone.res_layers.{si}.blocks.{block_idx}.{sub}.conv"
-    return ".".join(parts)
+    candidates_conv = [tail, f"backbone.{tail}"]
+    conv_key = None
+    for c in candidates_conv:
+        if f"{c}.weight" in state:
+            conv_key = f"{c}.weight"
+            break
+    if conv_key is None:
+        for c in candidates_conv:
+            if c in state:
+                conv_key = c
+                break
+
+    bn_prefix = tail.replace(".conv", ".norm")
+    bn_candidates = [bn_prefix, f"backbone.{bn_prefix}"]
+    bn_key = None
+    for c in bn_candidates:
+        if f"{c}.weight" in state:
+            bn_key = c
+            break
+
+    return conv_key, bn_key

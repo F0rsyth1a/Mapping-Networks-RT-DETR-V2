@@ -86,8 +86,20 @@ class MappingBackbone(nn.Module):
                 seed_counter += 1
 
     def _extract_pretrained(self, state: Dict[str, torch.Tensor], depth: int):
+        for name, (w_shape, _) in self.conv_specs.items():
+            out_ch = w_shape[0]
+            # Default BN buffers
+            self.bn_buffers[name] = {
+                "bn_w": torch.ones(out_ch),
+                "bn_b": torch.zeros(out_ch),
+                "bn_mean": torch.zeros(out_ch),
+                "bn_var": torch.ones(out_ch),
+                "bn_eps": 1e-5,
+            }
+
         if not state:
             return
+
         for name in self.conv_specs:
             conv_key, bn_prefix = _find_ckpt_keys(name, depth, state)
             if conv_key and conv_key in state:
@@ -101,6 +113,10 @@ class MappingBackbone(nn.Module):
                     self.bn_buffers[name] = {
                         "bn_w": state[w_key].detach().clone().float(),
                         "bn_b": state[b_key].detach().clone().float(),
+                        "bn_mean": state[m_key].detach().clone().float(),
+                        "bn_var": state[v_key].detach().clone().float(),
+                        "bn_eps": 1e-5,
+                    }
                         "bn_mean": state[m_key].detach().clone().float(),
                         "bn_var": state[v_key].detach().clone().float(),
                         "bn_eps": 1e-5,

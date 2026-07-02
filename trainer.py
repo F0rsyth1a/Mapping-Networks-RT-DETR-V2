@@ -118,8 +118,9 @@ def train(cfg: Config):
         for name, proj in mapping.projections.items():
             g = torch.Generator(device=device).manual_seed(proj._seed.item())
             Wo = torch.randn(proj.out_dim, mapping.latent_dim,
-                             generator=g, device=device, dtype=torch.float32) * proj.scale
-            raw = F.linear(mapping.z, Wo) + mapping.alpha * mapping.z.square().sum()
+                             generator=g, device=device, dtype=torch.float32)
+            Wo = Wo / (Wo.norm(p=2, dim=1, keepdim=True) + 1e-8)
+            raw = F.linear(mapping.z, Wo) + mapping.alpha * mapping.z.square().mean()
             in_range = ((raw > -2) & (raw < 2)).float().mean().item()
             print(f"  [{name}] raw in (-2,2): {in_range*100:.1f}%  "
                   f"|z|_2^2={mapping.z.square().sum().item():.6f}")

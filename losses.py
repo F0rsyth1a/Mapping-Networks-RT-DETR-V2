@@ -44,7 +44,8 @@ def alignment_loss(
 
     for name, proj in mapping.projections.items():
         g = torch.Generator(device=z.device).manual_seed(proj._seed.item())
-        Wo = torch.randn(proj.out_dim, d, generator=g, device=z.device, dtype=z.dtype) * proj.scale
+        Wo = torch.randn(proj.out_dim, d, generator=g, device=z.device, dtype=z.dtype)
+        Wo = Wo / (Wo.norm(p=2, dim=1, keepdim=True) + 1e-8)
 
         M = Wo + mapping.alpha * z
 

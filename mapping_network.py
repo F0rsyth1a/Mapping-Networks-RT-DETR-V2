@@ -31,7 +31,8 @@ class OnTheFlyProjection(nn.Module):
                         dtype: torch.dtype = torch.float32) -> torch.Tensor:
         g = torch.Generator(device=device)
         g.manual_seed(block_seed)
-        return torch.randn(rows, self.in_dim, generator=g, device=device, dtype=dtype)
+        W_block = torch.randn(rows, self.in_dim, generator=g, device=device, dtype=dtype)
+        return W_block / (W_block.norm(p=2, dim=1, keepdim=True) + 1e-8)
 
     def forward(
         self,
@@ -39,15 +40,16 @@ class OnTheFlyProjection(nn.Module):
         alpha: float,
         return_smoothness: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        z_norm_sq = z.square().sum(dim=1, keepdim=True)
-        modulation = alpha * z_norm_sq
+        z_norm_mean = z.square().mean(dim=1, keepdim=True)
+        modulation = alpha * z_norm_mean
 
         if self.block_size == 0:
             g = torch.Generator(device=z.device)
             g.manual_seed(self._seed.item())
             W = torch.randn(self.out_dim, self.in_dim, generator=g,
                             device=z.device, dtype=z.dtype)
-            raw_woz = F.linear(z, W * self.scale)
+            W = W / (W.norm(p=2, dim=1, keepdim=True) + 1e-8)
+            raw_woz = F.linear(z, W)
             raw = raw_woz + modulation
 
             if self.use_tanh:
@@ -57,8 +59,9 @@ class OnTheFlyProjection(nn.Module):
 
             smooth_val = None
             if return_smoothness:
-                row_norms = W.square().sum(dim=1).unsqueeze(0) * (self.scale ** 2)
-                s_val = row_norms + 4 * alpha * raw_woz + 4 * alpha ** 2 * z_norm_sq
+                coef = alpha / self.in_dim
+                z_sq_sum = z.square().sum()
+                s_val = 1.0 + 4.0 * coef * raw_woz + 4.0 * coef * coef * z_sq_sum
                 smooth_val = s_val.mean()
 
             return (theta, smooth_val) if return_smoothness else theta
@@ -72,7 +75,7 @@ class OnTheFlyProjection(nn.Module):
             block_seed = _hash_seed(self._seed.item(), start)
             W_block = self._generate_block(rows, block_seed, z.device, z.dtype)
 
-            raw_woz_block = F.linear(z, W_block * self.scale)
+            raw_woz_block = F.linear(z, W_block)
             raw_block = raw_woz_block + modulation
 
             if self.use_tanh:
@@ -83,8 +86,9 @@ class OnTheFlyProjection(nn.Module):
             theta[:, start:end] = theta_block
 
             if return_smoothness:
-                row_norms = W_block.square().sum(dim=1).unsqueeze(0) * (self.scale ** 2)
-                s_block = row_norms + 4 * alpha * raw_woz_block + 4 * alpha ** 2 * z_norm_sq
+                coef = alpha / self.in_dim
+                z_sq_sum = z.square().sum()
+                s_block = 1.0 + 4.0 * coef * raw_woz_block + 4.0 * coef * coef * z_sq_sum
                 smooth_sum = smooth_sum + s_block.sum()
 
         if return_smoothness:
@@ -150,8 +154,11 @@ class MappingNetwork(nn.Module):
             w_shape = spec["weight"]
             b_shape = spec["bias"]
             n_w = int(np.prod(w_shape))
-            w_flat = theta[:, :n_w]
-            b_flat = theta[:, n_w:]
+            fan_in = int(np.prod(w_shape[1:])) if len(w_shape) > 1 else w_shape[1]
+            weight_scale = 1.0 / (fan_in ** 0.5)
+            bias_scale = weight_scale * 0.01
+            w_flat = theta[:, :n_w] * weight_scale
+            b_flat = theta[:, n_w:] * bias_scale
             weights[name] = {
                 "weight": w_flat.view(w_shape),
                 "bias": b_flat.view(b_shape),

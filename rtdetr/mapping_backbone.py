@@ -94,7 +94,7 @@ class MappingBackbone(nn.Module):
                 "bn_b": torch.zeros(out_ch),
                 "bn_mean": torch.zeros(out_ch),
                 "bn_var": torch.ones(out_ch),
-                "bn_eps": 1e-5,
+                "bn_eps": torch.tensor(1e-5),
             }
 
         if not state:
@@ -115,7 +115,7 @@ class MappingBackbone(nn.Module):
                         "bn_b": state[b_key].detach().clone().float(),
                         "bn_mean": state[m_key].detach().clone().float(),
                         "bn_var": state[v_key].detach().clone().float(),
-                        "bn_eps": 1e-5,
+                        "bn_eps": torch.tensor(1e-5),
                     }
 
     def count_trainable_params(self) -> int:
@@ -174,7 +174,7 @@ class MappingBackbone(nn.Module):
         conv_w = {k: v.to(device) for k, v in adapted_weights.items()}
         bn = {}
         for k, v in self.bn_buffers.items():
-            bn[k] = {kk: vv.to(device) for kk, vv in v.items()}
+            bn[k] = {kk: vv if isinstance(vv, float) else vv.to(device) for kk, vv in v.items()}
 
         feats = presnet_forward(x, conv_w, bn, self.depth)
         if return_smoothness:

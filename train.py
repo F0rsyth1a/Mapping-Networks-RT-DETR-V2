@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--alpha", type=float, default=0.001)
     parser.add_argument("--latent_init_std", type=float, default=1.0)
-    parser.add_argument("--output_gain", type=float, default=3.0)
+    parser.add_argument("--output_gain", type=float, default=1.0)
     parser.add_argument("--lambda_stability", type=float, default=0.01)
     parser.add_argument("--lambda_smoothness", type=float, default=0.1)
     parser.add_argument("--lambda_alignment", type=float, default=0.001)

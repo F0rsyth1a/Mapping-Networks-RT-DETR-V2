@@ -57,6 +57,7 @@ class ReferenceBackbone(torch.nn.Module):
 def main():
     parser = argparse.ArgumentParser(description="RT-DETR Backbone Mapping Training")
     parser.add_argument("--pretrained_ckpt", type=str, default="")
+    parser.add_argument("--det_ckpt", type=str, default="", help="Full RT-DETR detection checkpoint (encoder+decoder)")
     parser.add_argument("--depth", type=int, default=18, choices=[18, 34, 50, 101])
     parser.add_argument("--latent_dim", type=int, default=1024)
     parser.add_argument("--layerwise", action="store_true", default=True)
@@ -95,6 +96,7 @@ def main():
     print(f"  Layerwise: {cfg.layerwise}")
     print(f"  Target conv params: {get_total_target_params(cfg.backbone_depth):,}")
     print(f"  Dummy data: {args.dummy}")
+    print(f"  Detection ckpt: {args.det_ckpt or 'none'}")
     print("=" * 60)
 
     device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
@@ -127,8 +129,14 @@ def main():
     if n_trainable > 0:
         print(f"  Compression ratio: {n_target / n_trainable:.1f}x")
 
+    encoder, decoder, criterion = None, None, None
+    if args.det_ckpt and os.path.exists(args.det_ckpt) and not args.dummy:
+        from rtdetr.encoder_decoder import load_frozen_ed
+        encoder, decoder, criterion = load_frozen_ed(args.det_ckpt, device)
+
     if args.dummy or not os.path.exists(cfg.data_dir):
         print(f"\nUsing dummy dataset ({args.dummy_samples} random images)")
+        encoder = decoder = criterion = None  # no detection modules in dummy mode
         train_ds = DummyDataset(num_samples=args.dummy_samples, img_size=cfg.img_size)
         train_loader = torch.utils.data.DataLoader(
             train_ds, batch_size=cfg.batch_size, shuffle=True
@@ -149,17 +157,9 @@ def main():
                 train_ds, batch_size=cfg.batch_size, shuffle=True
             )
 
-    has_pretrained = len(mapping.pretrained_conv) > 0
-    if has_pretrained:
-        ref_backbone = ReferenceBackbone(mapping.pretrained_conv, mapping.bn_buffers, mapping.depth).to(device)
-        ref_backbone.eval()
-        for p in ref_backbone.parameters():
-            p.requires_grad = False
-    else:
-        ref_backbone = None
-
     train_rtdetr_backbone(
-        mapping, ref_backbone, train_loader, cfg, device,
+        mapping, encoder, decoder, criterion,
+        train_loader, cfg, device,
     )
 
 

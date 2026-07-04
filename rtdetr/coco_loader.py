@@ -63,6 +63,7 @@ class CocoDetectionDataset(Dataset):
             "boxes": torch.tensor(boxes, dtype=torch.float32),
             "labels": torch.tensor(labels, dtype=torch.long),
             "orig_size": torch.tensor([orig_h, orig_w]),
+            "size": torch.tensor([self.img_size, self.img_size]),
             "img_id": img_info["id"],
         }
 

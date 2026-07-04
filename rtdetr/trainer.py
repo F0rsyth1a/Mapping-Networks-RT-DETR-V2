@@ -63,7 +63,9 @@ def run_backbone_diagnostic(mapping: MappingBackbone, device: torch.device):
 
 def train_rtdetr_backbone(
     mapping: MappingBackbone,
-    reference_backbone,
+    encoder: Optional[nn.Module],
+    decoder: Optional[nn.Module],
+    criterion: Optional[nn.Module],
     train_loader,
     cfg,
     device: torch.device,
@@ -104,10 +106,22 @@ def train_rtdetr_backbone(
 
             feats_mapping, smooth_val = mapping(images, return_smoothness=True)
 
-            if reference_backbone is not None:
-                with torch.no_grad():
-                    feats_ref = reference_backbone(images)
-                task_loss = _feature_distillation_loss(feats_mapping, feats_ref)
+            if encoder is not None and decoder is not None and criterion is not None:
+                # Move targets to device
+                targets_device = []
+                for t in targets:
+                    td = {}
+                    for k, v in t.items():
+                        if isinstance(v, torch.Tensor):
+                            td[k] = v.to(device)
+                        else:
+                            td[k] = v
+                    targets_device.append(td)
+
+                encoded = encoder(feats_mapping)
+                decoder_out = decoder(encoded, targets_device)
+                loss_dict = criterion(decoder_out, targets_device)
+                task_loss = sum(v for v in loss_dict.values() if isinstance(v, torch.Tensor))
             else:
                 task_loss = sum(f.abs().mean() for f in feats_mapping) * 0.0001
 
@@ -128,13 +142,24 @@ def train_rtdetr_backbone(
                 scheduler.step()
 
             total_loss += total.item()
-            total_task += task_loss.item()
+            if isinstance(task_loss, torch.Tensor):
+                total_task += task_loss.item()
+            elif isinstance(task_loss, dict):
+                total_task += sum(v.item() for v in task_loss.values() if isinstance(v, torch.Tensor))
+            else:
+                total_task += task_loss
             n_batches += 1
 
             if batch_idx % cfg.log_interval == 0:
+                if isinstance(task_loss, torch.Tensor):
+                    task_str = f"{task_loss.item():.4f}"
+                elif isinstance(task_loss, dict):
+                    task_str = f"{sum(v.item() for v in task_loss.values() if isinstance(v, torch.Tensor)):.4f}"
+                else:
+                    task_str = f"{task_loss:.4f}"
                 pbar.set_postfix({
                     "loss": f"{total.item():.4f}",
-                    "task": f"{task_loss.item():.4f}",
+                    "task": task_str,
                     "stab": f"{stab_loss.item():.4f}",
                     "smooth": f"{smooth_val.item():.4f}",
                 })

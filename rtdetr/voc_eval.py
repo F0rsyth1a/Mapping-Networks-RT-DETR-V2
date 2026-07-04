@@ -217,8 +217,13 @@ def evaluate_voc_map(
 
             preds = filter_voc_predictions(pred_logits, pred_boxes, orig_sizes)
             for p, t in zip(preds, targets):
-                gt_voc = {"boxes": t["boxes"], "labels": t["labels"]}
-                all_preds.append(p)
+                gt_voc = {
+                    "boxes": t["boxes"].cpu(),
+                    "labels": t["labels"].cpu(),
+                }
+                # Move preds to CPU for consistent AP computation
+                p_cpu = {k: v.cpu() for k, v in p.items()}
+                all_preds.append(p_cpu)
                 all_gts.append(gt_voc)
 
     # Per-class AP

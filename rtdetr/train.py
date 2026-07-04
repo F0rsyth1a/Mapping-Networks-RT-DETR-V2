@@ -75,7 +75,6 @@ def main():
         batch_size=args.batch_size,
         img_size=args.img_size,
         data_dir=args.data_dir,
-        img_size=args.img_size,
         output_gain=args.output_gain,
         device=args.device,
         exp_name=args.exp_name,

@@ -1,6 +1,10 @@
 """Load frozen RT-DETR encoder, decoder, and criterion from a full checkpoint."""
 import os
 import sys
+import torchvision
+if not hasattr(torchvision, 'datapoints'):
+    from torchvision import tv_tensors
+    torchvision.datapoints = tv_tensors
 import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple

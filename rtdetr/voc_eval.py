@@ -88,7 +88,7 @@ def filter_voc_predictions(
             nms_keep = torchvision_nms(cls_boxes, cls_s, nms_thresh)
             all_boxes.append(cls_boxes[nms_keep])
             all_scores.append(cls_s[nms_keep])
-            all_labels.append(torch.full_like(cls_s[nms_keep], vi, dtype=torch.long))
+            all_labels.append(torch.full_like(cls_s[nms_keep], coco_idx, dtype=torch.long))
 
         if all_boxes:
             results.append({

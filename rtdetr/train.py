@@ -142,16 +142,15 @@ def main():
             train_ds, batch_size=cfg.batch_size, shuffle=True
         )
     else:
-        _download_coco128(cfg.data_dir)
         from rtdetr.coco_loader import build_coco_loader
         img_dir = os.path.join(cfg.data_dir, "images", "train2017")
         ann_file = os.path.join(cfg.data_dir, "annotations", "instances_train2017.json")
-        if os.path.exists(img_dir) and os.path.exists(ann_file):
+        if os.path.exists(img_dir):
             train_loader = build_coco_loader(
                 img_dir, ann_file, cfg.batch_size, cfg.img_size, cfg.num_workers
             )
         else:
-            print("COCO128 annotations not found, falling back to dummy data")
+            print("Image directory not found, falling back to dummy data")
             train_ds = DummyDataset(num_samples=128, img_size=cfg.img_size)
             train_loader = torch.utils.data.DataLoader(
                 train_ds, batch_size=cfg.batch_size, shuffle=True

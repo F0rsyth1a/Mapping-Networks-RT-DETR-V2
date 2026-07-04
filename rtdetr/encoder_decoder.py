@@ -22,6 +22,13 @@ def _setup_rtdetr_path():
         sys.path.insert(0, rtdetr_src)
 
 
+# Mock src.data before _setup_rtdetr_path, so it doesn't trigger the import chain
+_dummy = type(sys)("mock")
+sys.modules["src.data"] = _dummy
+sys.modules["src.data.transforms"] = _dummy
+sys.modules["src.data.coco"] = _dummy
+sys.modules["src.data.coco.coco_dataset"] = _dummy
+
 _setup_rtdetr_path()
 
 from src.zoo.rtdetr.hybrid_encoder import HybridEncoder

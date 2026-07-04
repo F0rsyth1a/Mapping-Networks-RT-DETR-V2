@@ -28,6 +28,12 @@ sys.modules["src.data"] = _dummy
 sys.modules["src.data.transforms"] = _dummy
 sys.modules["src.data.coco"] = _dummy
 sys.modules["src.data.coco.coco_dataset"] = _dummy
+sys.modules["src.nn.backbone.regnet"] = _dummy
+sys.modules["src.nn.backbone.dla"] = _dummy
+sys.modules["src.nn.backbone.test_resnet"] = _dummy
+sys.modules["src.nn.criterion"] = _dummy
+sys.modules["src.nn.arch"] = _dummy
+sys.modules["src.misc.visualizer"] = _dummy
 
 _setup_rtdetr_path()
 

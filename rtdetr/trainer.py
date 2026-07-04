@@ -5,42 +5,26 @@ import torch.optim as optim
 from tqdm import tqdm
 from typing import Optional
 
-from rtdetr.mapping_backbone import MappingBackbone
+from rtdetr.mapping_backbone import MappingBackbone, _sanitize
 from rtdetr.spec import get_stage_groups
 
 
-def _backbone_stability_loss(mapping: MappingBackbone, x: torch.Tensor, sigma: float = 0.01):
-    """Stability: compare feature maps with z + noise."""
-    original_data = [l.data.clone() for l in mapping.latents]
-
-    for l in mapping.latents:
-        l.data.add_(torch.randn_like(l.data) * sigma)
-
-    with torch.no_grad():
-        feats_noisy = mapping(x, return_smoothness=False)
-
-    for i, l in enumerate(mapping.latents):
-        l.data.copy_(original_data[i])
-
-    feats_clean = mapping(x, return_smoothness=False)
-
-    loss = 0.0
-    for fc, fn in zip(feats_clean, feats_noisy):
-        loss += torch.nn.functional.mse_loss(fc, fn)
-    return loss / len(feats_clean)
-
-
-def _alignment_loss_det(mapping: MappingBackbone):
-    if mapping.layerwise:
-        return sum(z.pow(2).mean() * 0.0001 for z in mapping.latents)
-    return mapping.latent.pow(2).mean() * 0.0001
-
-
-def _feature_distillation_loss(feats_mapping, feats_reference):
-    loss = 0.0
-    for fm, fr in zip(feats_mapping, feats_reference):
-        loss += torch.nn.functional.mse_loss(fm, fr)
-    return loss / len(feats_mapping)
+def _delta_magnitude_per_stage(mapping: MappingBackbone) -> dict:
+    mags = {}
+    stages = get_stage_groups(mapping.depth)
+    for stage in stages:
+        total_mag = 0.0
+        count = 0
+        for name in mapping._name_list:
+            if mapping.conv_stage.get(name) == stage:
+                z = mapping._get_latent(stage)
+                proj = mapping.projections[_sanitize(name)]
+                with torch.no_grad():
+                    raw = proj(z, mapping.alpha, return_smoothness=False)
+                total_mag += raw.abs().mean().item()
+                count += 1
+        mags[stage] = total_mag / max(count, 1)
+    return mags
 
 
 def run_backbone_diagnostic(mapping: MappingBackbone, device: torch.device):
@@ -69,25 +53,42 @@ def train_rtdetr_backbone(
     train_loader,
     cfg,
     device: torch.device,
+    eval_fn=None,
+    eval_every: int = 0,
+    is_baseline: bool = False,
 ):
-    optimizer = optim.AdamW(
-        mapping.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
+    if is_baseline:
+        print("\n  *** BASELINE MODE: all params frozen, loss=baseline ***")
+        mapping.eval()
+        total_base = 0.0
+        n = 0
+        with torch.no_grad():
+            for images, targets in tqdm(train_loader, desc="Baseline eval"):
+                images = images.to(device)
+                td = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
+                feats = mapping(images)
+                encoded = encoder(feats)
+                out = decoder(encoded, td)
+                loss_dict = criterion(out, td)
+                total_base += sum(v.item() for v in loss_dict.values() if isinstance(v, torch.Tensor))
+                n += 1
+        avg_base = total_base / max(1, n)
+        print(f"  Baseline avg task_loss: {avg_base:.4f}")
+        # also print ΔW mag
+        mags = _delta_magnitude_per_stage(mapping)
+        print(f"  ΔW magnitude per stage: {mags}")
+        return mapping
+
+    optimizer = optim.AdamW(mapping.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=cfg.lr,
+        steps_per_epoch=len(train_loader),
+        epochs=cfg.epochs, pct_start=0.05,
     )
-    if train_loader is not None:
-        scheduler = optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=cfg.lr,
-            steps_per_epoch=len(train_loader),
-            epochs=cfg.epochs,
-            pct_start=0.05,
-        )
-    else:
-        scheduler = None
 
     run_backbone_diagnostic(mapping, device)
-
-    if train_loader is None:
-        print("No train_loader provided. Ending training.")
-        return mapping
+    mags0 = _delta_magnitude_per_stage(mapping)
+    print(f"  Initial ΔW magnitude per stage: {mags0}")
 
     best_loss = float("inf")
     os.makedirs(cfg.save_dir, exist_ok=True)
@@ -99,81 +100,57 @@ def train_rtdetr_backbone(
         n_batches = 0
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
-        for batch_idx, (images, targets) in enumerate(pbar):
+        for images, targets in pbar:
             images = images.to(device)
-
             optimizer.zero_grad()
 
             feats_mapping, smooth_val = mapping(images, return_smoothness=True)
 
             if encoder is not None and decoder is not None and criterion is not None:
-                # Move targets to device
-                targets_device = []
-                for t in targets:
-                    td = {}
-                    for k, v in t.items():
-                        if isinstance(v, torch.Tensor):
-                            td[k] = v.to(device)
-                        else:
-                            td[k] = v
-                    targets_device.append(td)
-
+                td = [{k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in t.items()} for t in targets]
                 encoded = encoder(feats_mapping)
-                decoder_out = decoder(encoded, targets_device)
-                loss_dict = criterion(decoder_out, targets_device)
+                decoder_out = decoder(encoded, td)
+                loss_dict = criterion(decoder_out, td)
                 task_loss = sum(v for v in loss_dict.values() if isinstance(v, torch.Tensor))
             else:
                 task_loss = sum(f.abs().mean() for f in feats_mapping) * 0.0001
 
-            stab_loss = _backbone_stability_loss(mapping, images, cfg.stability_sigma)
-            align_loss = _alignment_loss_det(mapping)
-
-            total = (
-                task_loss
-                + cfg.lambda_stability * stab_loss
-                + cfg.lambda_smoothness * smooth_val
-                + 0.001 * align_loss
-            )
+            total = task_loss + cfg.lambda_smoothness * smooth_val
 
             total.backward()
             torch.nn.utils.clip_grad_norm_(mapping.parameters(), max_norm=1.0)
             optimizer.step()
-            if scheduler:
-                scheduler.step()
+            scheduler.step()
 
             total_loss += total.item()
             if isinstance(task_loss, torch.Tensor):
                 total_task += task_loss.item()
-            elif isinstance(task_loss, dict):
-                total_task += sum(v.item() for v in task_loss.values() if isinstance(v, torch.Tensor))
-            else:
-                total_task += task_loss
             n_batches += 1
 
-            if batch_idx % cfg.log_interval == 0:
-                if isinstance(task_loss, torch.Tensor):
-                    task_str = f"{task_loss.item():.4f}"
-                elif isinstance(task_loss, dict):
-                    task_str = f"{sum(v.item() for v in task_loss.values() if isinstance(v, torch.Tensor)):.4f}"
-                else:
-                    task_str = f"{task_loss:.4f}"
+            if n_batches % cfg.log_interval == 0:
                 pbar.set_postfix({
                     "loss": f"{total.item():.4f}",
-                    "task": task_str,
-                    "stab": f"{stab_loss.item():.4f}",
+                    "task": f"{task_loss.item():.4f}" if isinstance(task_loss, torch.Tensor) else f"{task_loss:.4f}",
                     "smooth": f"{smooth_val.item():.4f}",
                 })
 
-        avg_loss = total_loss / max(1, n_batches)
-        avg_task = total_task / max(1, n_batches)
-        lr_val = scheduler.get_last_lr()[0] if scheduler else cfg.lr
+        avg_loss = total_loss / n_batches
+        avg_task = total_task / n_batches
+        lr_val = scheduler.get_last_lr()[0]
         print(f"  Epoch {epoch}: loss={avg_loss:.4f}  task={avg_task:.4f}  lr={lr_val:.2e}")
+
+        if epoch % max(1, eval_every) == 0 or epoch == cfg.epochs:
+            mags = _delta_magnitude_per_stage(mapping)
+            mag_str = "  ".join(f"{k}={v:.4f}" for k, v in mags.items())
+            print(f"  ΔW mag: {mag_str}")
+            if eval_fn:
+                metrics = eval_fn(mapping, encoder, decoder, train_loader, device)
+                print(f"  mAP: {metrics}")
 
         if avg_loss < best_loss:
             best_loss = avg_loss
             torch.save({
-                "epoch": epoch,
-                "model": mapping.state_dict(),
+                "epoch": epoch, "model": mapping.state_dict(),
                 "optimizer": optimizer.state_dict(),
             }, os.path.join(cfg.save_dir, f"{cfg.exp_name}_best.pt"))
 

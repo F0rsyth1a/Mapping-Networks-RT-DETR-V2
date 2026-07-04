@@ -37,21 +37,10 @@ class DummyDataset(torch.utils.data.Dataset):
         return img, {}
 
 
-class ReferenceBackbone(torch.nn.Module):
-    """Pretrained backbone forward without mapping modifications."""
-    def __init__(self, pretrained_conv, bn_buffers, depth):
-        super().__init__()
-        self.pretrained_conv = pretrained_conv
-        self.bn_buffers = bn_buffers
-        self.depth = depth
-
-    def forward(self, x):
-        from rtdetr.functional_presnet import presnet_forward
-        conv_w = {k: v.to(x.device) for k, v in self.pretrained_conv.items()}
-        bn = {}
-        for k, v in self.bn_buffers.items():
-            bn[k] = {kk: vv if isinstance(vv, float) else vv.to(x.device) for kk, vv in v.items()}
-        return presnet_forward(x, conv_w, bn, self.depth)
+def _voc_collate(batch):
+    images = torch.stack([item[0] for item in batch])
+    targets = [item[1] for item in batch]
+    return images, targets
 
 
 def main():
@@ -65,6 +54,9 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--img_size", type=int, default=640)
+    parser.add_argument("--max_samples", type=int, default=0, help="Limit dataset size for quick test")
+    parser.add_argument("--baseline", action="store_true", help="Run frozen baseline without mapping")
+    parser.add_argument("--eval_every", type=int, default=0, help="Evaluate mAP every N epochs (0=disabled)")
     parser.add_argument("--data_dir", type=str, default="./data/coco128")
     parser.add_argument("--dataset", type=str, default="coco128", choices=["coco128", "voc"])
     parser.add_argument("--output_gain", type=float, default=1.0)
@@ -83,6 +75,7 @@ def main():
         batch_size=args.batch_size,
         img_size=args.img_size,
         data_dir=args.data_dir,
+        img_size=args.img_size,
         output_gain=args.output_gain,
         device=args.device,
         exp_name=args.exp_name,
@@ -143,11 +136,22 @@ def main():
         train_loader = torch.utils.data.DataLoader(
             train_ds, batch_size=cfg.batch_size, shuffle=True
         )
-    elif args.dataset == "voc":
+    el    if args.dataset == "voc":
         from rtdetr.voc_loader import build_voc_loader
-        train_loader = build_voc_loader(
-            cfg.data_dir, "trainval", cfg.batch_size, cfg.img_size, cfg.num_workers
-        )
+        if args.max_samples > 0:
+            from rtdetr.voc_eval import class_balanced_sample
+            indices = class_balanced_sample(cfg.data_dir, "trainval", args.max_samples)
+            full_ds = build_voc_loader(cfg.data_dir, "trainval", cfg.batch_size, cfg.img_size, cfg.num_workers).dataset
+            train_ds = torch.utils.data.Subset(full_ds, indices)
+            train_loader = torch.utils.data.DataLoader(
+                train_ds, batch_size=cfg.batch_size, shuffle=True,
+                num_workers=cfg.num_workers,
+                collate_fn=_voc_collate,
+            )
+        else:
+            train_loader = build_voc_loader(
+                cfg.data_dir, "trainval", cfg.batch_size, cfg.img_size, cfg.num_workers
+            )
     else:
         from rtdetr.coco_loader import build_coco_loader
         img_dir = os.path.join(cfg.data_dir, "images", "train2017")
@@ -164,9 +168,17 @@ def main():
                 train_ds, batch_size=cfg.batch_size, shuffle=True
             )
 
+    eval_fn = None
+    if args.eval_every > 0 and encoder is not None:
+        from rtdetr.voc_eval import evaluate_voc_map
+        eval_fn = evaluate_voc_map
+
     train_rtdetr_backbone(
         mapping, encoder, decoder, criterion,
         train_loader, cfg, device,
+        eval_fn=eval_fn,
+        eval_every=args.eval_every,
+        is_baseline=args.baseline,
     )
 
 

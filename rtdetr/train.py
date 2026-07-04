@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--img_size", type=int, default=640)
     parser.add_argument("--data_dir", type=str, default="./data/coco128")
+    parser.add_argument("--dataset", type=str, default="coco128", choices=["coco128", "voc"])
     parser.add_argument("--output_gain", type=float, default=1.0)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--exp_name", type=str, default="mapping_rtdetr")
@@ -96,6 +97,7 @@ def main():
     print(f"  Layerwise: {cfg.layerwise}")
     print(f"  Target conv params: {get_total_target_params(cfg.backbone_depth):,}")
     print(f"  Dummy data: {args.dummy}")
+    print(f"  Dataset: {args.dataset}")
     print(f"  Detection ckpt: {args.det_ckpt or 'none'}")
     print("=" * 60)
 
@@ -134,12 +136,17 @@ def main():
         from rtdetr.encoder_decoder import load_frozen_ed
         encoder, decoder, criterion = load_frozen_ed(args.det_ckpt, device)
 
-    if args.dummy or not os.path.exists(cfg.data_dir):
+    if args.dummy:
         print(f"\nUsing dummy dataset ({args.dummy_samples} random images)")
-        encoder = decoder = criterion = None  # no detection modules in dummy mode
+        encoder = decoder = criterion = None
         train_ds = DummyDataset(num_samples=args.dummy_samples, img_size=cfg.img_size)
         train_loader = torch.utils.data.DataLoader(
             train_ds, batch_size=cfg.batch_size, shuffle=True
+        )
+    elif args.dataset == "voc":
+        from rtdetr.voc_loader import build_voc_loader
+        train_loader = build_voc_loader(
+            cfg.data_dir, "trainval", cfg.batch_size, cfg.img_size, cfg.num_workers
         )
     else:
         from rtdetr.coco_loader import build_coco_loader
@@ -151,6 +158,7 @@ def main():
             )
         else:
             print("Image directory not found, falling back to dummy data")
+            encoder = decoder = criterion = None
             train_ds = DummyDataset(num_samples=128, img_size=cfg.img_size)
             train_loader = torch.utils.data.DataLoader(
                 train_ds, batch_size=cfg.batch_size, shuffle=True

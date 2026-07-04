@@ -217,8 +217,16 @@ def evaluate_voc_map(
 
             preds = filter_voc_predictions(pred_logits, pred_boxes, orig_sizes)
             for p, t in zip(preds, targets):
+                # GT: cxcywh normalized → xyxy absolute pixels (match pred format)
+                gt_box = t["boxes"].cpu()
+                cx, cy, w, h = gt_box[:, 0], gt_box[:, 1], gt_box[:, 2], gt_box[:, 3]
+                orig_h, orig_w = t["orig_size"].tolist()
+                x1 = (cx - w / 2) * orig_w
+                y1 = (cy - h / 2) * orig_h
+                x2 = (cx + w / 2) * orig_w
+                y2 = (cy + h / 2) * orig_h
                 gt_voc = {
-                    "boxes": t["boxes"].cpu(),
+                    "boxes": torch.stack([x1, y1, x2, y2], dim=-1),
                     "labels": t["labels"].cpu(),
                 }
                 # Move preds to CPU for consistent AP computation

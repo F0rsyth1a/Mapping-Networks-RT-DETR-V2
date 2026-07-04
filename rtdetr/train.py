@@ -136,7 +136,7 @@ def main():
         train_loader = torch.utils.data.DataLoader(
             train_ds, batch_size=cfg.batch_size, shuffle=True
         )
-    el    if args.dataset == "voc":
+    elif args.dataset == "voc":
         from rtdetr.voc_loader import build_voc_loader
         if args.max_samples > 0:
             from rtdetr.voc_eval import class_balanced_sample

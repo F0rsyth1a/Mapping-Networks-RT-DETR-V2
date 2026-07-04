@@ -57,7 +57,7 @@ def filter_voc_predictions(
     pred_logits: torch.Tensor,
     pred_boxes: torch.Tensor,
     orig_sizes: torch.Tensor,
-    score_thresh: float = 0.3,
+    score_thresh: float = 0.05,  # lowered for cross-domain transfer
     nms_thresh: float = 0.5,
 ) -> List[Dict[str, torch.Tensor]]:
     """Filter COCO predictions (80-class) to VOC (20-class), apply NMS."""

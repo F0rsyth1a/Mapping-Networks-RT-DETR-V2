@@ -2,9 +2,12 @@
 import os
 import sys
 import torchvision
+import torchvision.transforms.v2 as T_v2
 if not hasattr(torchvision, 'datapoints'):
     from torchvision import tv_tensors
     torchvision.datapoints = tv_tensors
+if not hasattr(T_v2, 'ToImageTensor'):
+    T_v2.ToImageTensor = type('ToImageTensor', (), {})
 import torch
 import torch.nn as nn
 from typing import Dict, List, Tuple

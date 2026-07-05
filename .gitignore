@@ -3,4 +3,7 @@ __pycache__/
 *.pyo
 checkpoints/
 data/
+*.pth
+*.tar
+*.zip
 .DS_Store
